@@ -448,7 +448,21 @@ def should_require_auth(host: str, allow_public: bool = False) -> bool:
     is the threat model. ``allow_public`` (legacy ``--insecure``) is accepted for
     old launch scripts but IGNORED since the June 2026 hermes-0day campaign.
     """
-    return host not in _LOOPBACK_HOST_VALUES
+    if host in _LOOPBACK_HOST_VALUES:
+        try:
+            from hermes_cli.dashboard_auth import list_session_providers
+
+            # An explicitly configured password provider must remain the
+            # authentication boundary when a reverse proxy fronts a loopback
+            # dashboard. Native clients can then complete the advertised
+            # password-login flow instead of receiving the local SPA token.
+            return any(
+                bool(getattr(provider, "supports_password", False))
+                for provider in list_session_providers()
+            )
+        except Exception:
+            return False
+    return True
 
 
 def should_require_dashboard_auth(
@@ -1076,6 +1090,21 @@ def _configure_auth_gate(
     # config. A non-loopback public hostname engages the gate even on a loopback
     # backend, else the SPA's local session token becomes remotely reachable.
     app.state.trusted_public_hosts = _dashboard_public_hosts()
+    try:
+        dashboard_cfg = (load_config().get("dashboard") or {})
+        raw_origins = dashboard_cfg.get("trusted_origins") or []
+        if isinstance(raw_origins, str):
+            raw_origins = [raw_origins]
+        from hermes_cli.web_server_chat import _canonical_web_origin
+
+        app.state.trusted_ws_origins = frozenset(
+            origin
+            for raw_origin in raw_origins
+            if (origin := _canonical_web_origin(raw_origin)) is not None
+        )
+    except Exception as exc:
+        app.state.trusted_ws_origins = frozenset()
+        _log.warning("Could not load dashboard.trusted_origins: %s", exc)
     # auth_required drives middleware, SPA-token injection, WS auth, the
     # startup refusal, the gate-on banner and uvicorn proxy_headers.
     if _desktop_loopback_auth_exempt(host, ssh_session_token, ssh_owner_nonce):

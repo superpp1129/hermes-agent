@@ -422,6 +422,31 @@ class TestWsHostOriginGuardOrigins:
         ws = self._ws(origin="https://evil.test", host="fly-app.fly.dev")
         assert _web_server_chat._ws_host_origin_is_allowed(ws) is False
 
+    def test_configured_reverse_proxy_origin_is_allowed(self, loopback_app):
+        previous = getattr(web_server.app.state, "trusted_ws_origins", frozenset())
+        web_server.app.state.trusted_ws_origins = frozenset(
+            {"https://dashboard.example.test"}
+        )
+        try:
+            ws = self._ws(
+                origin="https://dashboard.example.test",
+                host="localhost",
+            )
+            assert _web_server_chat._ws_host_origin_is_allowed(ws) is True
+        finally:
+            web_server.app.state.trusted_ws_origins = previous
+
+    def test_unconfigured_reverse_proxy_origin_remains_rejected(self, loopback_app):
+        previous = getattr(web_server.app.state, "trusted_ws_origins", frozenset())
+        web_server.app.state.trusted_ws_origins = frozenset(
+            {"https://dashboard.example.test"}
+        )
+        try:
+            ws = self._ws(origin="https://evil.test", host="localhost")
+            assert _web_server_chat._ws_host_origin_is_allowed(ws) is False
+        finally:
+            web_server.app.state.trusted_ws_origins = previous
+
 
 
 class TestSidecarUrl:
@@ -473,4 +498,3 @@ class TestGatewayWsUrl:
         gw_cred = gw.split("internal=")[1].split("&")[0]
         sc_cred = sc.split("internal=")[1].split("&")[0]
         assert gw_cred == sc_cred
-

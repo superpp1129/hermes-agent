@@ -162,6 +162,16 @@ def _ws_client_is_allowed(ws: "WebSocket") -> bool:
     return _ws_client_reason(ws) is None
 
 
+def _canonical_web_origin(value: str) -> Optional[str]:
+    """Return a strict, path-free HTTP(S) origin for allowlist matching."""
+    parsed = urllib.parse.urlparse(str(value or "").strip())
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+        return None
+    if parsed.path not in {"", "/"} or parsed.params or parsed.query or parsed.fragment:
+        return None
+    return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}"
+
+
 def _ws_host_origin_reason(ws: "WebSocket") -> Optional[str]:
     """Return ``host_mismatch …`` / ``origin_mismatch …``, or None when allowed.
 
@@ -183,6 +193,10 @@ def _ws_host_origin_reason(ws: "WebSocket") -> Optional[str]:
         return None
     parsed = urllib.parse.urlparse(origin)
     if parsed.scheme not in {"http", "https"}:
+        return None
+    trusted_origins = getattr(app.state, "trusted_ws_origins", frozenset())
+    canonical_origin = _canonical_web_origin(origin)
+    if canonical_origin and canonical_origin in trusted_origins:
         return None
     if not parsed.netloc or not _is_accepted_host(parsed.netloc, bound_host, trusted_public_hosts):
         return f"origin_mismatch origin={origin} bound={bound_host}"

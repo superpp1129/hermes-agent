@@ -984,6 +984,10 @@ DEFAULT_CONFIG = {
         # the OAuth path. Empty or malformed (no http(s):// + host, or quote/angle/whitespace chars)
         # = reconstruct from headers.
         "public_url": "",
+        # Additional exact HTTP(S) origins allowed to open authenticated
+        # dashboard WebSockets through a trusted reverse proxy. This does not
+        # broaden the accepted HTTP Host values.
+        "trusted_origins": [],
     },
 
     "privacy": {

@@ -13,6 +13,9 @@ PUBLIC_API_PATHS: frozenset[str] = frozenset({
     # Portal wildcard liveness probe (``docs/agent-dashboard-public-url-contract.md``,
     # NAS side): version, gateway state, session count, auth-gate shape. No secrets.
     "/api/status",
+    # Login bootstrap used by native clients before a dashboard session exists.
+    # The route reports provider capabilities but contains no credentials.
+    "/api/auth/providers",
     # Read-only config-defaults / schema feeds for the SPA's Config page.
     "/api/config/defaults",
     "/api/config/schema",
