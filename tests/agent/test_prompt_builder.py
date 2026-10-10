@@ -434,6 +434,48 @@ class TestBuildNousSubscriptionPrompt:
 
 
 class TestBuildContextFilesPrompt:
+    def test_native_only_skips_foreign_files_but_preserves_soul(self, tmp_path, monkeypatch):
+        import hermes_cli.config as config
+        import agent.prompt_builder as builder
+
+        monkeypatch.setattr(config, "load_config_readonly", lambda: {"context_file_sources": ["hermes"]})
+        (tmp_path / "AGENTS.md").write_text("Other platform agent instructions.")
+        (tmp_path / "CLAUDE.md").write_text("Other platform Claude instructions.")
+        (tmp_path / ".cursorrules").write_text("Other platform cursor instructions.")
+        monkeypatch.setattr(builder, "load_soul_md", lambda *a, **k: "Global Hermes identity.")
+        result = build_context_files_prompt(cwd=str(tmp_path))
+        assert "Global Hermes identity." in result
+        assert "Other platform" not in result
+        # Exclusion is from automatic injection, not removal or a read ban.
+        assert "Other platform agent" in builder._load_agents_md(tmp_path)
+        assert "Other platform Claude" in builder._load_claude_md(tmp_path)
+        (tmp_path / ".hermes.md").write_text("Native project instructions.")
+        assert "Native project instructions." in build_context_files_prompt(cwd=str(tmp_path), skip_soul=True)
+
+    def test_empty_sources_skips_all_project_context(self, tmp_path, monkeypatch):
+        import hermes_cli.config as config
+
+        monkeypatch.setattr(config, "load_config_readonly", lambda: {"context_file_sources": []})
+        (tmp_path / ".hermes.md").write_text("Native project instructions.")
+        assert build_context_files_prompt(cwd=str(tmp_path), skip_soul=True) == ""
+
+    def test_source_policy_uses_agent_home_without_leaking_override(self, tmp_path, monkeypatch):
+        import hermes_cli.config as config
+        from hermes_constants import get_hermes_home
+
+        ambient_home = get_hermes_home()
+        selected_home = tmp_path / "profile"
+        selected_home.mkdir()
+        (tmp_path / "AGENTS.md").write_text("Other profile instructions.")
+
+        def selected_config():
+            assert get_hermes_home() == selected_home
+            return {"context_file_sources": ["hermes"]}
+
+        monkeypatch.setattr(config, "load_config_readonly", selected_config)
+        assert build_context_files_prompt(cwd=str(tmp_path), skip_soul=True, home_override=selected_home) == ""
+        assert get_hermes_home() == ambient_home
+
     def test_empty_dir_loads_seeded_global_soul(self, tmp_path):
         from unittest.mock import patch
 
@@ -1056,5 +1098,4 @@ class TestParallelToolCallGuidance:
 # =========================================================================
 # Budget warning history stripping
 # =========================================================================
-
 
