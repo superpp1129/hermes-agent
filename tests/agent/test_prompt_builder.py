@@ -442,8 +442,10 @@ class TestBuildContextFilesPrompt:
         (tmp_path / "AGENTS.md").write_text("Other platform agent instructions.")
         (tmp_path / "CLAUDE.md").write_text("Other platform Claude instructions.")
         (tmp_path / ".cursorrules").write_text("Other platform cursor instructions.")
-        monkeypatch.setattr(builder, "load_soul_md", lambda *a, **k: "Global Hermes identity.")
-        result = build_context_files_prompt(cwd=str(tmp_path))
+        profile = tmp_path / "profile"
+        profile.mkdir()
+        (profile / "SOUL.md").write_text("Global Hermes identity.")
+        result = build_context_files_prompt(cwd=str(tmp_path), home_override=profile)
         assert "Global Hermes identity." in result
         assert "Other platform" not in result
         # Exclusion is from automatic injection, not removal or a read ban.
@@ -1098,4 +1100,3 @@ class TestParallelToolCallGuidance:
 # =========================================================================
 # Budget warning history stripping
 # =========================================================================
-
