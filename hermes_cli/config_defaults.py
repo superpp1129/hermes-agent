@@ -625,6 +625,11 @@ DEFAULT_CONFIG = {
     # and override the dynamic behavior. Separate from read_file tool limits.
     "context_file_max_chars": None,
 
+    # Automatic project instruction sources, in the existing fixed precedence.
+    # Excluded formats remain ordinary files that tools may read on demand.
+    # SOUL.md is independent of this project-context allowlist.
+    "context_file_sources": ["hermes", "agents", "claude", "cursor"],
+
     # Maximum characters returned by a single read_file call.  Reads that
     # exceed this are rejected with guidance to use offset+limit.
     # 100K chars ≈ 25–35K tokens across typical tokenisers.

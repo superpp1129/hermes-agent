@@ -2167,32 +2167,21 @@ def _build_skills_system_prompt_inner(
                     index_lines.append(f"    - {name}")
 
         result = (
-            "## Skills (mandatory)\n"
-            "Before replying, scan the skills below. If a skill matches or is even partially relevant "
-            "to your task, you MUST load it with skill_view(name) and follow its instructions. "
-            "Err on the side of loading — it is always better to have context you don't need "
-            "than to miss critical steps, pitfalls, or established workflows. "
-            "Skills contain specialized knowledge — API endpoints, tool-specific commands, "
-            "and proven workflows that outperform general-purpose approaches. Load the skill "
-            "even if you think you could handle the task with basic tools like web_search or terminal. "
-            "Skills also encode the user's preferred approach, conventions, and quality standards "
-            "for tasks like code review, planning, and testing — load them even for tasks you "
-            "already know how to do, because the skill defines how it should be done here.\n"
-            "Whenever the user asks you to configure, set up, install, enable, disable, modify, "
-            "or troubleshoot Hermes Agent itself — its CLI, config, models, providers, tools, "
-            "skills, voice, gateway, plugins, or any feature — load the `hermes-agent` skill "
-            "first. It has the actual commands (e.g. `hermes config set …`, `hermes tools`, "
-            "`hermes setup`) so you don't have to guess or invent workarounds.\n"
-            "If a skill has issues, fix it with skill_manage(action='patch').\n"
-            "After difficult/iterative tasks, offer to save as a skill. "
-            "If a skill you loaded was missing steps, had wrong commands, or needed "
-            "pitfalls you discovered, update it before finishing.\n"
+            "## Skills (on demand)\n"
+            "Skills are optional references. Load a skill with skill_view(name) when the user "
+            "explicitly requests it or its specific instructions would materially help the task. "
+            "Partial relevance alone is not a reason to load one. For straightforward work, "
+            "use the available tools and existing memory/project instructions directly. "
+            "Load only the skills and supporting references you need; do not preload the catalog "
+            "or repeatedly read unchanged instructions already in context. "
+            "Preserve applicable security, approval and project requirements. "
+            "Do not create, install or modify skills unless the user requests it.\n"
             "\n"
             "<available_skills>\n"
             + "\n".join(index_lines) + "\n"
             "</available_skills>\n"
             "\n"
-            "Only proceed without loading a skill if genuinely none are relevant to the task."
+            "Proceed without loading a skill whenever it adds no material value to the task."
             + hidden_note
         )
 
@@ -2520,6 +2509,28 @@ def _load_cursorrules(cwd_path: Path, context_length: Optional[int] = None) -> s
     )
 
 
+def _context_file_sources(home_override: "Path | None" = None) -> set[str]:
+    """Resolve the profile's automatic project-context allowlist."""
+    token = None
+    try:
+        if home_override is not None:
+            token = set_hermes_home_override(str(home_override))
+        from hermes_cli.config import load_config_readonly
+
+        config = load_config_readonly()
+        sources = config.get("context_file_sources", ["hermes", "agents", "claude", "cursor"])
+        if not isinstance(sources, list):
+            logger.warning("Invalid context_file_sources; using Hermes-native context only")
+            return {"hermes"}
+        return {s for s in sources if isinstance(s, str) and s in {"hermes", "agents", "claude", "cursor"}}
+    except Exception as exc:
+        logger.warning("Could not resolve context_file_sources; using Hermes-native context only: %s", exc)
+        return {"hermes"}
+    finally:
+        if token is not None:
+            reset_hermes_home_override(token)
+
+
 def build_context_files_prompt(
     cwd: Optional[str] = None,
     skip_soul: bool = False,
@@ -2535,6 +2546,8 @@ def build_context_files_prompt(
       3. CLAUDE.md / claude.md   (cwd only)
       4. .cursorrules / .cursor/rules/*.mdc  (cwd only)
 
+    ``context_file_sources`` filters those four formats before any file is read.
+    Omission preserves the existing precedence; [] disables project auto-loading.
     SOUL.md from HERMES_HOME is independent and always included when present.
 
     Each context source is capped before injection. The cap defaults to the
@@ -2577,13 +2590,19 @@ def build_context_files_prompt(
         )
         project_context = ""
     else:
-        # Priority-based project context: first match wins
-        project_context = (
-            _load_hermes_md(cwd_path, context_length)
-            or _load_agents_md(cwd_path, context_length)
-            or _load_claude_md(cwd_path, context_length)
-            or _load_cursorrules(cwd_path, context_length)
-        )
+        # Filter before reading: excluded formats remain available on demand.
+        sources = _context_file_sources(home_override)
+        project_context = ""
+        for source, loader in (
+            ("hermes", _load_hermes_md),
+            ("agents", _load_agents_md),
+            ("claude", _load_claude_md),
+            ("cursor", _load_cursorrules),
+        ):
+            if source in sources:
+                project_context = loader(cwd_path, context_length)
+                if project_context:
+                    break
     if project_context:
         sections.append(project_context)
 
