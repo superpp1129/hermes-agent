@@ -211,13 +211,14 @@ INTERRUPT_WAITING_FOR_MODEL_PREFIX = "Operation interrupted: waiting for model r
 
 
 def _should_rearm_compression_budget(
-    compression_attempts: int, *, completed_compaction_pending: bool, prompt_tokens: int, threshold_tokens: int
+    compression_attempts: int, *, completed_compaction_pending: bool, prompt_tokens: int, threshold_tokens: int,
+    unlimited_cycles: bool = False,
 ) -> bool:
-    """True once a provider proves a completed compaction worked: rough estimates cannot
-    rearm the anti-thrash budget, only the completed-compaction latch plus a positive
-    normalized prompt count below the threshold."""
+    """True once provider usage proves a completed compression cycle recovered headroom."""
     return bool(
-        compression_attempts and completed_compaction_pending and 0 < prompt_tokens < threshold_tokens
+        compression_attempts
+        and (completed_compaction_pending or unlimited_cycles)
+        and 0 < prompt_tokens < threshold_tokens
     )
 
 

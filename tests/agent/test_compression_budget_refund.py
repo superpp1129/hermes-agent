@@ -41,6 +41,25 @@ class TestRearmDecision:
             threshold_tokens=10_000,
         )
 
+    def test_unlimited_cycles_rearms_after_provider_confirmed_headroom(self):
+        assert _should_rearm_compression_budget(
+            3,
+            completed_compaction_pending=False,
+            prompt_tokens=7_999,
+            threshold_tokens=10_000,
+            unlimited_cycles=True,
+        )
+
+    @pytest.mark.parametrize("prompt_tokens", [0, 10_000, 10_001])
+    def test_unlimited_cycles_never_rearms_without_real_headroom(self, prompt_tokens):
+        assert not _should_rearm_compression_budget(
+            3,
+            completed_compaction_pending=False,
+            prompt_tokens=prompt_tokens,
+            threshold_tokens=10_000,
+            unlimited_cycles=True,
+        )
+
     @pytest.mark.parametrize(
         ("attempts", "pending", "prompt_tokens", "threshold_tokens"),
         [

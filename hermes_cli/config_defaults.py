@@ -520,6 +520,11 @@ DEFAULT_CONFIG = {
     # .cursorrules) before head/tail truncation. null = scale with the model's context window (floor
     # 20K, ceiling 500K); a positive int pins a fixed cap. Separate from read_file limits.
     "context_file_max_chars": None,
+
+    # Automatic project instruction sources, in the fixed precedence used by
+    # prompt_builder. Excluded formats remain ordinary files that tools may
+    # read on demand. SOUL.md is independent of this project allowlist.
+    "context_file_sources": ["hermes", "agents", "claude", "cursor"],
     # Seconds to wait for a single context file read before skipping it with a warning. Guards startup
     # against network-backed filesystems (iCloud Drive, OneDrive, NFS) that can block a cold read.
     "context_file_read_timeout": 5.0,
@@ -607,6 +612,10 @@ DEFAULT_CONFIG = {
         # max_attempts: retry rounds before a turn gives up with "max compression attempts reached".
         # Raise (e.g. 6) for tool-schema-heavy sessions. Validated >= 1, cap 10.
         "max_attempts": 3,
+        # Opt-in: successful provider-confirmed recovery below the threshold
+        # rearms max_attempts, allowing another bounded compression cycle in a
+        # long tool turn. Failed and still-pressured attempts remain capped.
+        "unlimited_cycles": False,
         # proactive_prune_tokens: opt-in trigger (tokens) for the deterministic no-LLM tool-result
         # prune, independent of `threshold` (which rarely fires on large windows, so old tool output
         # is re-sent every turn); e.g. 48000 reclaims early. 0 = off. Tail protected by

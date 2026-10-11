@@ -22,13 +22,14 @@ from hermes_state import SessionDB
 from run_agent import AIAgent
 
 
-def _config(max_attempts=None) -> dict:
+def _config(max_attempts=None, unlimited_cycles=False) -> dict:
     compression = {
         "enabled": True,
         "threshold": 0.50,
         "target_ratio": 0.20,
         "protect_first_n": 3,
         "protect_last_n": 20,
+        "unlimited_cycles": unlimited_cycles,
     }
     if max_attempts is not None:
         compression["max_attempts"] = max_attempts
@@ -40,14 +41,18 @@ def _config(max_attempts=None) -> dict:
     }
 
 
-def _make_agent(monkeypatch, tmp_path: Path, *, max_attempts=None):
+def _make_agent(monkeypatch, tmp_path: Path, *, max_attempts=None, unlimited_cycles=False):
     from hermes_cli import config as config_mod
 
     monkeypatch.setattr(
-        config_mod, "load_config", lambda: _config(max_attempts=max_attempts)
+        config_mod, "load_config", lambda: _config(
+            max_attempts=max_attempts, unlimited_cycles=unlimited_cycles
+        )
     )
     monkeypatch.setattr(
-        config_mod, "load_config_readonly", lambda: _config(max_attempts=max_attempts)
+        config_mod, "load_config_readonly", lambda: _config(
+            max_attempts=max_attempts, unlimited_cycles=unlimited_cycles
+        )
     )
     db = SessionDB(db_path=tmp_path / "state.db")
     with contextlib.redirect_stdout(io.StringIO()):
@@ -67,6 +72,15 @@ def _make_agent(monkeypatch, tmp_path: Path, *, max_attempts=None):
 
 
 class TestCompressionMaxAttemptsConfig:
+
+    def test_unlimited_cycles_requires_yaml_true(self, monkeypatch, tmp_path):
+        enabled = _make_agent(monkeypatch, tmp_path, unlimited_cycles=True)
+        assert enabled.unlimited_compression_cycles is True
+        enabled.client.close()
+
+        disabled = _make_agent(monkeypatch, tmp_path, unlimited_cycles="false")
+        assert disabled.unlimited_compression_cycles is False
+        disabled.client.close()
 
     def test_custom_value_is_honored(self, monkeypatch, tmp_path):
         agent = _make_agent(monkeypatch, tmp_path, max_attempts=6)

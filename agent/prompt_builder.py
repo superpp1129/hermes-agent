@@ -1473,24 +1473,18 @@ def _render_skills_index(
             + hidden_note
         )
     return (
-        "## Skills\n"
-        "Before replying, scan the skills below. If a skill matches or is even partially relevant to your "
-        "task, you MUST load it with skill_view(name) and follow its instructions. Err on the side of "
-        "loading — it is always better to have context you don't need than to miss critical steps, pitfalls, "
-        "or established workflows. Skills contain specialized knowledge — API endpoints, tool-specific "
-        "commands, and proven workflows that outperform general-purpose approaches. Load the skill "
-        f"even if you think you could handle the task with basic tools like {_basic_tools}. "
-        "Skills also encode the user's preferred approach, conventions, and quality standards for tasks like "
-        "code review, planning, and testing — load them even for tasks you already know how to do, because "
-        "the skill defines how it should be done here.\n"
-        "If a skill has issues, fix it with skill_manage(action='patch').\n"
-        "After difficult/iterative tasks, offer to save as a skill. If a skill you loaded was missing steps, "
-        "had wrong commands, or needed pitfalls you discovered, update it before finishing.\n"
+        "## Skills (on demand)\n"
+        "Skills are optional references. Load a skill with skill_view(name) when the user explicitly requests "
+        "it or its specific instructions would materially help the task. Partial relevance alone is not a "
+        "reason to load one. For straightforward work, use the available tools and existing memory/project "
+        "instructions directly. Load only the skills and supporting references you need; do not preload the "
+        "catalog or repeatedly read unchanged instructions already in context. Preserve applicable security, "
+        "approval and project requirements. Do not create, install or modify skills unless the user requests it.\n"
         "\n"
         "<available_skills>\n"
         + "\n".join(index_lines) + "\n"
         "</available_skills>\n\n"
-        "Only proceed without loading a skill if genuinely none are relevant to the task."
+        "Proceed without loading a skill whenever it adds no material value to the task."
         + hidden_note
     )
 
@@ -1854,15 +1848,41 @@ def _load_cursorrules(cwd_path: Path, context_length: Optional[int] = None) -> s
                              read_path=str(cwd_path / ".cursorrules"))
 
 
+def _context_file_sources(home_override: Path | None = None) -> set[str]:
+    """Resolve the profile's automatic project-context allowlist."""
+    token = None
+    try:
+        if home_override is not None:
+            token = set_hermes_home_override(str(home_override))
+        from hermes_cli.config import load_config_readonly
+
+        config = load_config_readonly()
+        sources = config.get("context_file_sources", ["hermes", "agents", "claude", "cursor"])
+        if not isinstance(sources, list):
+            logger.warning("Invalid context_file_sources; using Hermes-native context only")
+            return {"hermes"}
+        return {
+            source for source in sources
+            if isinstance(source, str) and source in {"hermes", "agents", "claude", "cursor"}
+        }
+    except Exception as exc:
+        logger.warning("Could not resolve context_file_sources; using Hermes-native context only: %s", exc)
+        return {"hermes"}
+    finally:
+        if token is not None:
+            reset_hermes_home_override(token)
+
+
 def build_context_files_prompt(
     cwd: Optional[str] = None, skip_soul: bool = False, context_length: Optional[int] = None,
     allow_install_tree_fallback: bool = False, home_override: Path | None = None,
 ) -> str:
     """Discover and load context files for the system prompt (each capped, see ``_get_context_file_max_chars``).
 
-    Only ONE project context type loads, first found wins: .hermes.md/HERMES.md (walk to git root) →
+    Only ONE enabled project context type loads, first found wins: .hermes.md/HERMES.md (walk to git root) →
     AGENTS.md chain (git root → cwd) → CLAUDE.md (cwd) → .cursorrules + .cursor/rules/*.mdc (cwd). SOUL.md
     from HERMES_HOME is independent and always included unless *skip_soul* (already the identity slot).
+    ``context_file_sources`` filters project formats before any file is read.
     """
     cwd_path = Path(cwd if cwd is not None else os.getcwd()).resolve()
     if _project_context_suppressed(cwd, cwd_path, allow_install_tree_fallback):
@@ -1872,8 +1892,19 @@ def build_context_files_prompt(
         )
         sections = []
     else:
-        sections = [_load_hermes_md(cwd_path, context_length) or _load_agents_md(cwd_path, context_length)
-                    or _load_claude_md(cwd_path, context_length) or _load_cursorrules(cwd_path, context_length)]
+        sources = _context_file_sources(home_override)
+        project_context = ""
+        for source, loader in (
+            ("hermes", _load_hermes_md),
+            ("agents", _load_agents_md),
+            ("claude", _load_claude_md),
+            ("cursor", _load_cursorrules),
+        ):
+            if source in sources:
+                project_context = loader(cwd_path, context_length)
+                if project_context:
+                    break
+        sections = [project_context]
     if not skip_soul:
         sections.append(load_soul_md(context_length, home_override=home_override))
     sections = [s for s in sections if s]

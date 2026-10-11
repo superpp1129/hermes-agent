@@ -54,6 +54,10 @@ class TestConfigParsing:
         assert ToolSearchConfig.from_raw(None).effective_defer_tools == configured
         assert ToolSearchConfig.from_raw({"defer": ["terminal"]}).effective_defer_tools == {"terminal"}
         assert ToolSearchConfig.from_raw({"defer": []}).effective_defer_tools == set()
+        assert ToolSearchConfig.from_raw({"defer_tools": ["terminal"]}).effective_defer_tools == {"terminal"}
+        assert ToolSearchConfig.from_raw({
+            "defer": ["read_file"], "defer_tools": ["terminal"],
+        }).effective_defer_tools == {"read_file"}
 
         with caplog.at_level("WARNING", logger="tools.tool_search"):
             assert ToolSearchConfig.from_raw({"defer": "todo_list"}).effective_defer_tools == configured

@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from agent.agent_init import _merge_custom_provider_extra_body
+from agent.agent_init import _compressor_max_tokens, _merge_custom_provider_extra_body
 
 
 
@@ -71,3 +71,19 @@ def test_named_custom_provider_extra_body_matches_provider_key():
     )
 
     assert agent.request_overrides == {"extra_body": {"enable_thinking": False}}
+
+
+def test_provider_output_cap_reserves_room_for_automatic_compression():
+    agent = SimpleNamespace(
+        provider="custom:local",
+        model="local-model",
+        base_url="http://localhost:1234/v1",
+        max_tokens=4096,
+        request_overrides={"max_tokens": 1024, "extra_body": {"max_tokens": 8192}},
+    )
+    assert _compressor_max_tokens(agent) == 8192
+    agent.request_overrides = {"extra_body": {"max_completion_tokens": 2048}}
+    assert _compressor_max_tokens(agent) == 2048
+    for invalid in (True, -1, 0, None, "8192"):
+        agent.request_overrides = {"extra_body": {"max_tokens": invalid}}
+        assert _compressor_max_tokens(agent) == 4096

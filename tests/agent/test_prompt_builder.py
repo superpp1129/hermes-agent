@@ -353,6 +353,33 @@ class TestBuildSkillsSystemPrompt:
 
 
 class TestBuildContextFilesPrompt:
+    def test_native_only_skips_foreign_files_but_preserves_soul(self, tmp_path, monkeypatch):
+        import hermes_cli.config as config
+        import agent.prompt_builder as builder
+
+        monkeypatch.setattr(config, "load_config_readonly", lambda: {"context_file_sources": ["hermes"]})
+        (tmp_path / "AGENTS.md").write_text("Other platform agent instructions.")
+        (tmp_path / "CLAUDE.md").write_text("Other platform Claude instructions.")
+        (tmp_path / ".cursorrules").write_text("Other platform cursor instructions.")
+        profile = tmp_path / "profile"
+        profile.mkdir()
+        (profile / "SOUL.md").write_text("Global Hermes identity.")
+        result = build_context_files_prompt(cwd=str(tmp_path), home_override=profile)
+        assert "Global Hermes identity." in result
+        assert "Other platform" not in result
+        assert "Other platform agent" in builder._load_agents_md(tmp_path)
+        assert "Other platform Claude" in builder._load_claude_md(tmp_path)
+        (tmp_path / ".hermes.md").write_text("Native project instructions.")
+        assert "Native project instructions." in build_context_files_prompt(
+            cwd=str(tmp_path), skip_soul=True
+        )
+
+    def test_empty_sources_skips_all_project_context(self, tmp_path, monkeypatch):
+        import hermes_cli.config as config
+
+        monkeypatch.setattr(config, "load_config_readonly", lambda: {"context_file_sources": []})
+        (tmp_path / ".hermes.md").write_text("Native project instructions.")
+        assert build_context_files_prompt(cwd=str(tmp_path), skip_soul=True) == ""
     def test_empty_dir_loads_seeded_global_soul(self, tmp_path):
         from unittest.mock import patch
 

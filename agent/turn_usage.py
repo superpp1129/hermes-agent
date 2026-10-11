@@ -140,6 +140,7 @@ def record_response_usage(
     if _loop_mod()._should_rearm_compression_budget(
         compression_attempts, completed_compaction_pending=_completed_compaction_pending,
         prompt_tokens=prompt_tokens, threshold_tokens=_compression_threshold,
+        unlimited_cycles=getattr(agent, "unlimited_compression_cycles", False) is True,
     ):
         logger.info(
             "Compression budget rearmed after provider-confirmed "

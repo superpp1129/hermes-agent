@@ -1942,21 +1942,34 @@ def _select_context_engine(_agent_cfg):
 
 
 def _compressor_max_tokens(agent):
-    """``agent.max_tokens``, or the native-Gemini adapter default when unset: generateContent
-    still sends maxOutputTokens=65,535 and the threshold is pct×(window − max_tokens), so
-    reserving 0 let the provider 400 before compaction fired."""
-    if agent.max_tokens is not None:
-        return agent.max_tokens
-    with suppress(Exception):
-        from agent.gemini_native_adapter import (
-            GEMINI_DEFAULT_MAX_OUTPUT_TOKENS, is_native_gemini_base_url
-        )
-        _gemini_provider = str(agent.provider or "").strip().lower() in {
-            "gemini", "google", "google-gemini", "google-ai-studio",
-        }
-        if _gemini_provider or is_native_gemini_base_url(agent.base_url):
-            return GEMINI_DEFAULT_MAX_OUTPUT_TOKENS
-    return None
+    """Reserve the output cap that the transport will actually send.
+
+    Custom-provider ``extra_body`` values override ordinary SDK request
+    fields, so they must also override the compressor's reservation.
+    """
+    fallback = agent.max_tokens
+    if fallback is None:
+        with suppress(Exception):
+            from agent.gemini_native_adapter import (
+                GEMINI_DEFAULT_MAX_OUTPUT_TOKENS, is_native_gemini_base_url
+            )
+            _gemini_provider = str(agent.provider or "").strip().lower() in {
+                "gemini", "google", "google-gemini", "google-ai-studio",
+            }
+            if _gemini_provider or is_native_gemini_base_url(agent.base_url):
+                fallback = GEMINI_DEFAULT_MAX_OUTPUT_TOKENS
+    overrides = getattr(agent, "request_overrides", None)
+    if not isinstance(overrides, dict):
+        return fallback
+    fields = dict(overrides)
+    extra = overrides.get("extra_body")
+    if isinstance(extra, dict):
+        fields.update(extra)
+    for key in ("max_completion_tokens", "max_tokens"):
+        if key in fields:
+            value = fields[key]
+            return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else fallback
+    return fallback
 
 
 def _build_context_engine(agent, _agent_cfg, cs, _custom_providers, _effective_context_length, session_db):
@@ -2036,6 +2049,9 @@ def _build_context_engine(agent, _agent_cfg, cs, _custom_providers, _effective_c
         is_codex_backend=(agent.provider or "").strip().lower() == "openai-codex",
     )
     agent.max_compression_attempts = cs.max_attempts
+    agent.unlimited_compression_cycles = (
+        _cfg_dict(_agent_cfg, "compression").get("unlimited_cycles", False) is True
+    )
     agent.compression_idle_compact_after_seconds = cs.idle_compact_after_seconds
 
 

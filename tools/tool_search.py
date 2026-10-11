@@ -63,7 +63,10 @@ class ToolSearchConfig:
         if not isinstance(raw, dict):  # legacy bool / None
             raw = {"enabled": "off" if raw is False else "auto"}
         max_search_limit = _clamped_int(raw.get("max_search_limit"), 25, 1, 50)
-        defer_raw = raw.get("defer")
+        # ``defer_tools`` was used by the earlier local implementation. Keep
+        # it as a compatibility alias so existing profiles retain the exact
+        # deferred surface after upgrading; the upstream ``defer`` key wins.
+        defer_raw = raw.get("defer", raw.get("defer_tools"))
         if defer_raw is not None and not isinstance(defer_raw, (list, tuple, set)):
             # Loud, then the curated default: a scalar here means the user tried to shrink the
             # tool surface and got nothing — never silently ignore it (#116404).
