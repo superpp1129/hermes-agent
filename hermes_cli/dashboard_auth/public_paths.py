@@ -13,6 +13,10 @@ PUBLIC_API_PATHS: frozenset[str] = frozenset({
     # Portal wildcard liveness probe (``docs/agent-dashboard-public-url-contract.md``,
     # NAS side): version, gateway state, session count, auth-gate shape. No secrets.
     "/api/status",
+    # Login bootstrap used by Hermes Desktop and Conduit before a dashboard
+    # session exists. The OAuth gate already treats this route as public;
+    # include it here so loopback mode follows the same contract.
+    "/api/auth/providers",
     # Read-only config-defaults / schema feeds for the SPA's Config page.
     "/api/config/defaults",
     "/api/config/schema",

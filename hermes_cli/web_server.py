@@ -526,7 +526,24 @@ def should_require_auth(host: str, allow_public: bool = False) -> bool:
     is the threat model. ``allow_public`` (legacy ``--insecure``) is accepted for
     old launch scripts but IGNORED since the June 2026 hermes-0day campaign.
     """
-    return host not in _LOOPBACK_HOST_VALUES
+    # A loopback bind normally uses the legacy session-token path. When the
+    # operator explicitly configured the bundled password provider, honour it
+    # on loopback too so remote clients behind a trusted reverse proxy can
+    # complete the advertised password-login cookie flow.
+    basic_auth_configured = False
+    if host in _LOOPBACK_HOST_VALUES:
+        try:
+            from hermes_cli.dashboard_auth import list_session_providers
+
+            basic_auth_configured = any(
+                bool(getattr(provider, "supports_password", False))
+                for provider in list_session_providers()
+            )
+        except Exception:
+            # Provider discovery is best-effort here; the normal non-loopback
+            # fail-closed checks below still enforce public-bind security.
+            pass
+    return host not in _LOOPBACK_HOST_VALUES or basic_auth_configured
 
 
 def should_require_dashboard_auth(
@@ -1641,6 +1658,23 @@ def start_server(
     # The SPA bootstrap reads this so profile-less deep links (/chat?resume=<id>) inherit the
     # launcher's preselected profile instead of silently running in the launch scope (#73085).
     app.state.initial_profile = str(initial_profile or "")
+    try:
+        from hermes_cli.config import load_config as _load_cfg
+
+        _dashboard_cfg = (_load_cfg().get("dashboard") or {})
+        _trusted_origins = _dashboard_cfg.get("trusted_origins") or []
+        if isinstance(_trusted_origins, str):
+            _trusted_origins = [_trusted_origins]
+        from hermes_cli.web_server_chat import _canonical_web_origin
+
+        app.state.trusted_ws_origins = frozenset(
+            origin
+            for raw_origin in _trusted_origins
+            if (origin := _canonical_web_origin(raw_origin)) is not None
+        )
+    except Exception as exc:
+        app.state.trusted_ws_origins = frozenset()
+        _log.warning("Could not load dashboard.trusted_origins: %s", exc)
 
     config, server = _build_uvicorn_server(host, port, ssh_isolated=bool(ssh_session_token))
 

@@ -1009,6 +1009,10 @@ DEFAULT_CONFIG = {
     "dashboard": {
         # Visual theme: "default" | "midnight" | "ember" | "mono" | "cyberpunk" | "rose"
         "theme": "default",
+        # Additional exact web origins allowed to open authenticated dashboard
+        # WebSockets through a trusted reverse proxy. HTTP Host validation
+        # remains tied to the local bind address.
+        "trusted_origins": [],
         # Process-isolation rollout controls. Read via the raw config loader, so tui_gateway.server
         # also owns explicit defaults.
         "turn_isolation": False,
