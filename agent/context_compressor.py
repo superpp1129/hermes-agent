@@ -519,6 +519,13 @@ _INFLIGHT_TASK_REPLAY_HEADER = (
     "start over.]"
 )
 
+# ``original`` summary-source mode keeps the first older checkpoint byte-identical
+# outside every later summarizer prompt. The explicit end marker makes extraction
+# unambiguous even when the frozen body contains ordinary Markdown headings.
+_FROZEN_SUMMARY_START = "<!-- hermes:frozen-summary:start -->\n## Older Context (Frozen Summary)"
+_FROZEN_SUMMARY_END = "<!-- hermes:frozen-summary:end -->"
+_ORIGINAL_SOURCE_PREPARED = "_hermes_original_source_prepared"
+
 _SALVAGE_SUMMARY_MAX_CHARS = 8_000
 _SALVAGE_KEEP_RECENT_TOOLS = 2
 
@@ -2809,10 +2816,13 @@ class ContextCompressor(
         proactive_prune_tokens: int = 0, proactive_prune_min_result_chars: int = 8000,
         proactive_prune_min_reclaim_tokens: int = 4096, min_tail_user_messages: int = 1, tail_mode: str = "lean",
         custom_providers: list | None = None,
+        summary_source: str = "previous", summary_source_windows: int = 2,
     ):
         self.model, self.base_url, self.api_key, self.provider, self.api_mode = model, base_url, api_key, provider, api_mode
         # "lean" = small clamped tail + verbatim-user summary section; "legacy" = 0.20*window tail.
         self.tail_mode = tail_mode if tail_mode in ("legacy", "lean") else "lean"
+        self.summary_source = summary_source if summary_source in ("previous", "original") else "previous"
+        self.summary_source_windows = max(1, min(int(summary_source_windows), 10))
         # Per-model context_length overrides live in custom_providers; without them deferred
         # resolution falls back to the hardcoded family catalog (#83324).
         self.custom_providers = custom_providers or None
@@ -3471,6 +3481,96 @@ class ContextCompressor(
         budget = int(content_tokens * _SUMMARY_RATIO)
         return max(_MIN_SUMMARY_TOKENS, min(budget, self.max_summary_tokens))
 
+    @staticmethod
+    def _extract_frozen_summary(summary: str | None) -> str:
+        """Frozen body from an ``original`` checkpoint, byte-stable after its first write."""
+        text = summary or ""
+        start = text.find(_FROZEN_SUMMARY_START)
+        if start < 0:
+            return ""
+        start += len(_FROZEN_SUMMARY_START)
+        end = text.find(_FROZEN_SUMMARY_END, start)
+        if end < 0:
+            return ""
+        return text[start:end].removeprefix("\n").removesuffix("\n")
+
+    @classmethod
+    def _append_frozen_summary(cls, summary: str, frozen: str) -> str:
+        """Append *frozen* without ever sending it through another summarizer call."""
+        frozen = frozen.strip()
+        if not frozen:
+            return summary
+        return (
+            f"{summary.rstrip()}\n\n{_FROZEN_SUMMARY_START}\n"
+            f"{frozen}\n{_FROZEN_SUMMARY_END}"
+        )
+
+    def _compaction_history(self) -> list[dict[str, Any]]:
+        """Deduped persisted display history, or ``[]`` when the store cannot provide it."""
+        session_db = getattr(self, "_session_db", None)
+        session_id = getattr(self, "_session_id", "")
+        getter = getattr(session_db, "get_messages", None)
+        if not session_id or not callable(getter):
+            return []
+        try:
+            rows = getter(session_id, include_compacted=True)
+            return rows if isinstance(rows, list) else []
+        except Exception as exc:
+            logger.debug("Original-source compression could not read persisted turns: %s", exc)
+            return []
+
+    def _frozen_summary_for_original_source(self, history: list[dict[str, Any]]) -> str:
+        """Existing frozen body, else the earliest persisted checkpoint for a bounded migration."""
+        existing = self._extract_frozen_summary(self._previous_summary)
+        if existing:
+            return existing
+        for message in history:
+            if not isinstance(message, dict) or not self._is_context_summary_message(message):
+                continue
+            body = self._strip_summary_prefix(_content_text_for_contains(message.get("content")))
+            nested = self._extract_frozen_summary(body)
+            return nested or body
+        # A store-less/plugin compressor can still switch modes without dropping its sole checkpoint.
+        return self._strip_summary_prefix(self._previous_summary or "")
+
+    def _original_summary_source(
+        self, turns_to_summarize: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], str]:
+        """Last N persisted original windows plus the current window; never a prior summary.
+
+        In-place compaction keeps replaced originals as ``compacted=1``. Summary rows delimit
+        generations in their deduped display order. For N=2, rows after the second-newest
+        checkpoint provide the previous compacted window, while ``turns_to_summarize`` is the
+        current one. Protected active-tail rows are excluded because they remain verbatim.
+        """
+        history = self._compaction_history()
+        frozen = _redact_compaction_text(self._frozen_summary_for_original_source(history))
+        summary_indices = [
+            index for index, message in enumerate(history)
+            if isinstance(message, dict) and self._is_context_summary_message(message)
+        ]
+        boundary = summary_indices[-self.summary_source_windows] if len(summary_indices) >= self.summary_source_windows else -1
+        original_turns: list[dict[str, Any]] = []
+        for message in history[boundary + 1:]:
+            if not isinstance(message, dict) or message.get("role") == "system":
+                continue
+            if self._is_context_summary_message(message):
+                # A merged carrier may also hold genuine prior-tail text. Recover that text,
+                # but never let the summary or its end marker enter the auxiliary prompt.
+                stripped = self._strip_context_summary_handoff_message(_fresh_compaction_message_copy(message))
+                if stripped is not None and message.get("compacted"):
+                    original_turns.append(stripped)
+                continue
+            if message.get("compacted"):
+                original_turns.append(message)
+        original_turns.extend(turns_to_summarize)
+        prepared = []
+        for message in original_turns or turns_to_summarize:
+            copied = dict(message)
+            copied[_ORIGINAL_SOURCE_PREPARED] = True
+            prepared.append(copied)
+        return prepared, frozen
+
     # Summarizer-input limits: the budget is the summary model's window, not the main model's.
     _CONTENT_MAX = 6000       # total chars per message body
     _CONTENT_HEAD = 4000      # chars kept from the start
@@ -3592,7 +3692,7 @@ class ContextCompressor(
         completed = anchors["completed"]
         active_task = f"User asked: {user_asks[-1]!r}" if user_asks else _NO_USER_TASK_SENTINEL
         previous_summary_note = ""
-        if self._previous_summary:
+        if self._previous_summary and self.summary_source != "original":
             previous_summary = redact_sensitive_text(self._previous_summary.strip())
             previous_summary = elide(previous_summary, _FALLBACK_PREVIOUS_SUMMARY_MAX_CHARS)
             previous_summary_note = (
@@ -3648,7 +3748,11 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         summary = elide(summary, _FALLBACK_SUMMARY_MAX_CHARS)
         # Re-inject AFTER the size cap: markers live at the end, where truncation cuts.
         summary = _reinject_pruned_skill_markers(summary, _pruned_names)
-        return self._augment_summary_lean(summary, turns_to_summarize)
+        summary = self._augment_summary_lean(summary, turns_to_summarize)
+        if self.summary_source == "original":
+            history = self._compaction_history()
+            summary = self._append_frozen_summary(summary, self._frozen_summary_for_original_source(history))
+        return summary
 
     def _demote_stale_tail_tools(self, messages: list[dict[str, Any]], tail_start: int) -> list[dict[str, Any]]:
         """Lean mode: demote tail tool results older than the newest ``_LEAN_TAIL_KEEP_TOOL_ROUNDS`` rounds to
@@ -3995,11 +4099,26 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
             focus_topic = _redact_compaction_text(focus_topic)
         if self._previous_summary:
             self._previous_summary = _redact_compaction_text(self._previous_summary)
+        frozen_summary = ""
+        include_previous_summary = self.summary_source != "original"
+        if not include_previous_summary:
+            source_prepared = bool(
+                turns_to_summarize
+                and all(message.get(_ORIGINAL_SOURCE_PREPARED) for message in turns_to_summarize)
+            )
+            if not source_prepared:
+                turns_to_summarize, frozen_summary = self._original_summary_source(turns_to_summarize)
+            else:
+                frozen_summary = _redact_compaction_text(
+                    self._frozen_summary_for_original_source(self._compaction_history())
+                )
         summary_budget = self._compute_summary_budget(turns_to_summarize)
         # Ghost-skill defense: LLMs paraphrase [SKILL_PRUNED] markers away; collect the names
         # deterministically BEFORE the call (from the turn LIST, not the bounded text), re-inject after.
         _pruned_skill_names = list(dict.fromkeys(
-            _collect_ghosted_skill_names(turns_to_summarize) + _extract_pruned_skill_names(self._previous_summary or "")
+            _collect_ghosted_skill_names(turns_to_summarize)
+            + _extract_pruned_skill_names(self._previous_summary or "")
+            + _extract_pruned_skill_names(frozen_summary)
         ))[:_MAX_PRUNED_SKILL_MARKERS]
         # Lean mode even-samples oversized input (one bounded request, never a second).
         if getattr(self, "tail_mode", "lean") == "lean":
@@ -4011,7 +4130,10 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         has_user_turn = getattr(self, "_summary_has_user_turn", None)
         if has_user_turn is None:
             has_user_turn = self._transcript_has_real_user_turn(turns_to_summarize)
-        prompt = self._build_summary_prompt(content_to_summarize, summary_budget, focus_topic, memory_context, has_user_turn)
+        prompt = self._build_summary_prompt(
+            content_to_summarize, summary_budget, focus_topic, memory_context, has_user_turn,
+            include_previous_summary=include_previous_summary,
+        )
         try:
             content = self._call_summary_llm(prompt, prompt_started_at)
             # Strip <think> blocks: they would be stored, injected, and compounded on every iterative update.
@@ -4025,6 +4147,7 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
             summary = self._ground_historical_task_snapshot(summary, turns_to_summarize)
             summary = self._augment_summary_lean(summary, turns_to_summarize)
             self._validate_summary_user_provenance(summary, has_user_turn)
+            summary = self._append_frozen_summary(summary, frozen_summary)
             # A detached stale attempt must not publish its late summary onto shared compressor state:
             # the fallback already advanced _previous_summary and owns the cooldown/error fields. The
             # candidate itself is discarded downstream by the working-attempt check; bail here so the
@@ -4046,7 +4169,7 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
 
     def _build_summary_prompt(
         self, content_to_summarize: str, summary_budget: int, focus_topic: Optional[str],
-        memory_context: str, has_user_turn: bool,
+        memory_context: str, has_user_turn: bool, *, include_previous_summary: bool = True,
     ) -> str:
         """Assemble the summarizer prompt (fresh or iterative-update form); focus guidance goes last so it takes precedence."""
         _memory_section = _memory_provider_section(memory_context)
@@ -4065,7 +4188,7 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         # Lean mode folds the session log into this SAME single request (one aux call).
         _session_log_section = _LEAN_SESSION_LOG_SECTION if getattr(self, "tail_mode", "lean") == "lean" else ""
         _template_sections = self._summary_template_sections(_section, summary_budget, _session_log_section)
-        if self._previous_summary:
+        if include_previous_summary and self._previous_summary:
             # Iterative update. Bound the previous summary too: a rehydrated handoff can be huge.
             _bounded_previous_summary = self._bound_summary_input(self._previous_summary)
             prompt = f"""{_summarizer_preamble}

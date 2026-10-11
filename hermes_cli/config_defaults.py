@@ -598,6 +598,12 @@ DEFAULT_CONFIG = {
         "threshold_tokens": None,
         # "progress_notices": False,    # opt-in (#52995): when True, routine compression
         "target_ratio": 0.20,         # fraction of threshold to preserve as recent tail
+        # previous = iterative summary-of-summary (legacy/default). original = rebuild the recent
+        # checkpoint from persisted original turns, never feeding a prior summary back to the LLM.
+        "summary_source": "previous",
+        # In original mode, include this many recent compaction windows as source material. Older
+        # context is carried as one frozen checkpoint, byte-identical and outside the summarizer.
+        "summary_source_windows": 2,
         # tail_mode: "lean" = clamped 2.5%-of-window tail (10K floor / 25K cap) plus chunked
         # digests, anchor index, verbatim user messages and session_search pointers in the summary
         # (~3x fewer retained tokens; a few extra summarizer calls at the boundary). "legacy" =

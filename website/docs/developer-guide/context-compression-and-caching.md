@@ -288,6 +288,8 @@ compression:
   #   "glm-5.2": 0.40        # longest key wins). See "Per-model threshold
   #   "claude-sonnet": 0.35  # overrides" below.
   target_ratio: 0.20         # How much of threshold to keep as tail (default: 0.20)
+  summary_source: previous   # previous | original (default: previous)
+  summary_source_windows: 2  # Persisted original windows used by original mode
   tail_mode: lean            # Tail retention policy: lean | legacy (default: lean)
   protect_last_n: 20         # Minimum protected tail messages (default: 20)
   min_tail_user_messages: 1  # Real user messages guaranteed in the tail (default: 1)
@@ -314,6 +316,8 @@ auxiliary:
 | `threshold_tokens` | `null` | int or `null` | Optional absolute cap on the trigger: when set, compaction fires at the lower of the ratio trigger and this count. `null` = ratio-only |
 | `model_thresholds` | `{}` | map | Per-model overrides of `threshold`. Keys are substring-matched against the model name (longest match wins); `"<provider>:<substring>"` keys apply only on that provider. The small-context floor still applies on top (see below) |
 | `target_ratio` | `0.20` | 0.10-0.80 | Controls tail protection token budget: `threshold_tokens × target_ratio` (legacy mode only — `lean` uses its own clamp) |
+| `summary_source` | `previous` | `previous`, `original` | `previous` iteratively updates the last summary. Opt-in `original` rebuilds the recent checkpoint from persisted original turns and never feeds a previous summary to the summarizer; older continuity is appended as a frozen reference. |
+| `summary_source_windows` | `2` | 1-10 | Number of recent persisted compaction windows supplied in `original` mode. Larger values increase auxiliary input cost. |
 | `tail_mode` | `lean` | `lean`, `legacy` | Tail retention policy. `legacy` keeps a `target_ratio`-sized verbatim tail (~100K+ tokens on big-window models). `lean` keeps a clamped tail of `2.5% × context window` (10K floor, 25K cap) and instead carries continuity in the summary: a detailed identifier-preserving session log (produced by the same single summary request — lean compaction makes exactly one auxiliary LLM call per attempt), a mechanically extracted anchor index (PR numbers, SHAs, paths, error strings — regex, never paraphrased), every real user message quoted verbatim (newest-first budget), and a `session_search` recovery pointer so the agent can re-access anything summarized away. Oversized regions are evenly sampled into the summarizer input (with explicit elision markers) rather than triggering extra calls. Result on 500K-token real sessions: ~49K retained vs ~162K, with higher recall when paired with recovery (see `evals/compaction/results/`). Old tool results inside the lean tail are demoted to one-line stubs carrying a recovery pointer |
 | `protect_last_n` | `20` | ≥1 | Minimum number of recent messages always preserved |
 | `min_tail_user_messages` | `1` | ≥1 | Minimum number of REAL (actionable) user messages guaranteed to survive in the uncompressed tail. `1` = the existing single last-user anchor (behavior-preserving default). Raise to e.g. `3` to keep the last 3 real user turns verbatim even when bulky tool outputs fill the tail token budget. Blank platform echoes, compaction handoffs, and synthetic continuation rows never count toward N. The guarantee wins over the tail token budget — the tail may exceed the budget when the anchor pulls the cut back |
@@ -635,9 +639,9 @@ Orphaned tool_call/tool_result pairs are cleaned up by `_sanitize_tool_pairs()`:
 - Tool results referencing removed calls → removed
 - Tool calls whose results were removed → stub result injected
 
-### Iterative Re-compression
+### Re-compression source
 
-On subsequent compressions, the previous summary is passed to the LLM with
+With the default `summary_source: previous`, the previous summary is passed to the LLM with
 instructions to **update** it rather than summarize from scratch. This preserves
 information across multiple compactions — items move from "In Progress" to "Done",
 new progress is added, and obsolete information is removed.
@@ -645,6 +649,15 @@ new progress is added, and obsolete information is removed.
 The `_previous_summary` field on the compressor instance stores the last summary
 text for this purpose. A deterministic fallback summary is stored there too, since
 it is the handoff the transcript now carries.
+
+With opt-in `summary_source: original`, Hermes instead reads the deduplicated
+compaction history already persisted in `state.db`. The auxiliary call receives
+only original turns from the configured recent windows plus the current window;
+no previous summary or summary end marker is included. The earliest older
+checkpoint is appended outside the generated text as `Older Context (Frozen
+Summary)` and then carried byte-identically. This bounds recursive summary drift
+and does not add another cache break, but it increases auxiliary input and very
+old detail may exist only in the frozen checkpoint or recoverable session history.
 
 
 ## Before/After Example

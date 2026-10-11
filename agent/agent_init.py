@@ -1547,6 +1547,12 @@ def _parse_compression_config(agent, _agent_cfg) -> CompressionSettings:
         enabled=_cfg_flag(cfg, "enabled", True),
         target_ratio=target_ratio,
         protect_last=protect_last,
+        summary_source=(
+            str(cfg.get("summary_source", "previous")).strip().lower()
+            if str(cfg.get("summary_source", "previous")).strip().lower() in {"previous", "original"}
+            else "previous"
+        ),
+        summary_source_windows=max(1, min(_parse_config_int(cfg.get("summary_source_windows", 2), 2), 10)),
         # "lean" keeps a clamped 2.5%/10K-25K verbatim tail (continuity rides the summary);
         # "legacy" restores the 0.20*threshold tail. Unknown → lean inside the compressor.
         tail_mode=str(cfg.get("tail_mode", "lean")).strip().lower(),
@@ -2012,7 +2018,8 @@ def _build_context_engine(agent, _agent_cfg, cs, _custom_providers, _effective_c
             proactive_prune_min_result_chars=cs.proactive_prune_min_chars,
             proactive_prune_min_reclaim_tokens=cs.proactive_prune_min_reclaim,
             min_tail_user_messages=cs.min_tail_users, tail_mode=cs.tail_mode,
-            custom_providers=_custom_providers,
+            custom_providers=_custom_providers, summary_source=cs.summary_source,
+            summary_source_windows=cs.summary_source_windows,
         )
     _bind_session_state = getattr(agent.context_compressor, "bind_session_state", None)
     if callable(_bind_session_state):

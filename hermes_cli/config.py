@@ -3079,6 +3079,9 @@ def _show_compression_section(config: dict[str, Any]) -> None:
     except (TypeError, ValueError):
         pass
     print(f"  Target ratio: {compression.get('target_ratio', 0.20) * 100:.0f}% of threshold preserved")
+    summary_source = compression.get('summary_source', 'previous')
+    source_detail = f", {compression.get('summary_source_windows', 2)} windows" if summary_source == 'original' else ''
+    print(f"  Summary source: {summary_source}{source_detail}")
     print(f"  Protect last: {compression.get('protect_last_n', 20)} messages")
     print(f"  Protect first: {compression.get('protect_first_n', 3)} non-system head messages")
     aux_comp = config.get('auxiliary', {}).get('compression', {})
