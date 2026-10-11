@@ -236,17 +236,21 @@ def _should_rearm_compression_budget(
     completed_compaction_pending: bool,
     prompt_tokens: int,
     threshold_tokens: int,
+    unlimited_cycles: bool = False,
 ) -> bool:
     """Return True after a provider proves a completed compaction worked.
 
     Rough estimates cannot safely rearm the anti-thrash budget: they can dip
     below the threshold while the provider-visible prompt remains too large.
-    Require the completed-compaction latch plus a positive, normalized prompt
-    count below the threshold from the next successful provider response.
+    Normally require the completed-compaction latch. In unlimited-cycle mode,
+    any successful request with real usage below threshold restores the retry
+    allowance: a no-op summarizer followed by transport/tool-result pruning
+    can recover headroom without setting the completed-compaction latch.
+    Neither mode refunds missing usage or a still-pressured request.
     """
     return bool(
         compression_attempts
-        and completed_compaction_pending
+        and (completed_compaction_pending or unlimited_cycles)
         and threshold_tokens > 0
         and 0 < prompt_tokens < threshold_tokens
     )
@@ -4129,6 +4133,9 @@ def run_conversation(
                         completed_compaction_pending=_completed_compaction_pending,
                         prompt_tokens=prompt_tokens,
                         threshold_tokens=_compression_threshold,
+                        unlimited_cycles=(
+                            getattr(agent, "unlimited_compression_cycles", False) is True
+                        ),
                     ):
                         logger.info(
                             "Compression budget rearmed after provider-confirmed "

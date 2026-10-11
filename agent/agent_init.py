@@ -490,6 +490,29 @@ def _merge_custom_provider_extra_body(agent, custom_providers: List[Dict[str, An
     agent.request_overrides = overrides
 
 
+def _compression_output_reservation(agent) -> Optional[int]:
+    """Budget for the output cap actually sent, including custom extra_body.
+
+    SDK extra_body fields override normal request fields. They must also
+    reserve space in the compressor, without changing generation settings.
+    """
+    fallback = getattr(agent, "max_tokens", None)
+    overrides = getattr(agent, "request_overrides", None)
+    if not isinstance(overrides, dict):
+        return fallback
+    fields = dict(overrides)
+    extra = overrides.get("extra_body")
+    if isinstance(extra, dict):
+        fields.update(extra)
+    for key in ("max_completion_tokens", "max_tokens"):
+        if key in fields:
+            value = fields[key]
+            if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                return value
+            return fallback
+    return fallback
+
+
 def _normalize_run_budget_seconds(value) -> Optional[float]:
     """Normalize a wall-clock run budget value to a positive float or None.
 
@@ -2718,7 +2741,7 @@ def init_agent(
             provider=agent.provider,
             api_mode=agent.api_mode,
             abort_on_summary_failure=compression_abort_on_summary_failure,
-            max_tokens=agent.max_tokens,
+            max_tokens=_compression_output_reservation(agent),
             model_thresholds=compression_model_thresholds,
             threshold_tokens_cap=compression_threshold_tokens,
             proactive_prune_tokens=compression_proactive_prune_tokens,
@@ -2749,6 +2772,12 @@ def init_agent(
     agent.codex_responses_native_compaction = codex_responses_native_compaction
     agent.codex_responses_compact_threshold = codex_responses_compact_threshold
     agent.max_compression_attempts = compression_max_attempts
+    # Opt-in: the cap limits consecutive unverified recovery, not the total
+    # number of compression cycles in a long tool turn. Require YAML true;
+    # strings such as "false" must not silently enable the behavior.
+    agent.unlimited_compression_cycles = (
+        _compression_cfg.get("unlimited_cycles", False) is True
+    )
     agent.compression_idle_compact_after_seconds = (
         compression_idle_compact_after_seconds
     )

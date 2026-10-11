@@ -63,7 +63,7 @@ OPENAI_COMPAT_WIRE_EFFORTS: tuple[str, ...] = (
 
 #: OpenAI/Codex Responses backend — per-model vocabulary, live-verified
 #: (Aug 2026): ``minimal`` is rejected by both generations (clamps to low);
-#: ``max`` is gpt-5.6-only — gpt-5.5 rejects it with "Supported values are:
+#: ``max`` starts with gpt-5.6 — gpt-5.5 rejects it with "Supported values are:
 #: 'none', 'low', 'medium', 'high', 'xhigh'" (#68365's premise, confirmed).
 CODEX_GPT56_EFFORTS: tuple[str, ...] = (
     "none", "low", "medium", "high", "xhigh", "max",
@@ -75,7 +75,19 @@ CODEX_LEGACY_EFFORTS: tuple[str, ...] = (
 
 def codex_supported_efforts(model: Optional[str]) -> tuple[str, ...]:
     """Supported effort set for an OpenAI/Codex Responses model."""
-    if "gpt-5.6" in (model or "").lower():
+    bare = (model or "").lower().rsplit("/", 1)[-1]
+    bare = re.sub(r"-\d{4}-\d{2}-\d{2}$", "", bare)
+    if bare.startswith("gpt-6"):
+        return ("low", "medium", "high", "xhigh", "max")
+    if bare.startswith(("o1", "o3", "o4")):
+        return ("low", "medium", "high")
+    if bare in {"gpt-5", "gpt-5-mini", "gpt-5-nano"}:
+        return ("minimal", "low", "medium", "high")
+    if bare == "gpt-5-pro":
+        return ("high",)
+    if bare == "gpt-5.1":
+        return ("none", "low", "medium", "high")
+    if "gpt-5.6" in bare:
         return CODEX_GPT56_EFFORTS
     return CODEX_LEGACY_EFFORTS
 

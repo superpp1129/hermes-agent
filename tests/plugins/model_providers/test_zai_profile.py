@@ -35,6 +35,25 @@ def zai_profile():
 class TestZaiThinkingWireShape:
     """``build_api_kwargs_extras`` produces Z.AI's exact wire format."""
 
+    def test_subscription_relay_uses_native_wire_without_rerouting(self, zai_profile):
+        from agent.transports.chat_completions import ChatCompletionsTransport
+        kwargs = ChatCompletionsTransport().build_kwargs(
+            model="glm-5.3", messages=[{"role": "user", "content": "Hi"}],
+            provider_name="glm-subscription", base_url="http://127.0.0.1:8792/v1",
+            reasoning_config={"enabled": True, "effort": "low"},
+        )
+        assert kwargs["reasoning_effort"] == "low"
+        assert kwargs["extra_body"]["thinking"] == {"type": "enabled"}
+        assert "base_url" not in kwargs and "api_key" not in kwargs
+
+    @pytest.mark.parametrize("effort", ["low", "high", "max"])
+    def test_glm53_picker_levels_reach_wire(self, zai_profile, effort):
+        extra, top = zai_profile.build_api_kwargs_extras(
+            reasoning_config={"enabled": True, "effort": effort}, model="glm-5.3"
+        )
+        assert extra["thinking"]["type"] == "enabled"
+        assert top["reasoning_effort"] == effort
+
     def test_no_preference_omits_thinking(self, zai_profile):
         """No reasoning_config → omit ``thinking`` so the server default
         applies (matches prior behavior for users with no preference)."""

@@ -196,7 +196,8 @@ def agent():
 
 
 def _run_marathon_turn(
-    agent, n_tool_iterations: int, *, provider_prompt_tokens: int | None
+    agent, n_tool_iterations: int, *, provider_prompt_tokens: int | None,
+    completed_compaction_pending: bool = True,
 ):
     """Drive one turn of ``n_tool_iterations`` oversized tool results."""
     responses = [
@@ -213,7 +214,7 @@ def _run_marathon_turn(
         # unaffected. Arm the same provider-verification boundary as the real
         # compression path.
         compress_calls.append(len(messages))
-        agent.context_compressor._verify_compaction_cleared_threshold = True
+        agent.context_compressor._verify_compaction_cleared_threshold = completed_compaction_pending
         agent.context_compressor.awaiting_real_usage_after_compression = True
         compacted = [
             dict(m, content="[summarized]")
@@ -241,6 +242,31 @@ def _run_marathon_turn(
 
 
 class TestCompressionBudgetRefund:
+    @pytest.mark.parametrize("unlimited", [False, True])
+    def test_recovered_headroom_without_summary_latch(self, agent, unlimited):
+        """Pruning can recover real headroom without a summary-completion latch."""
+        agent.unlimited_compression_cycles = unlimited
+        result, calls = _run_marathon_turn(
+            agent, n_tool_iterations=8, provider_prompt_tokens=THRESHOLD - 1,
+            completed_compaction_pending=False,
+        )
+        assert result["completed"] is True
+        if unlimited:
+            assert len(calls) >= 8
+        else:
+            assert len(calls) <= agent.max_compression_attempts
+
+    @pytest.mark.parametrize("provider_prompt_tokens", [None, THRESHOLD, THRESHOLD + 1])
+    def test_unlimited_cycles_does_not_refund_unrecovered_requests(
+        self, agent, provider_prompt_tokens
+    ):
+        agent.unlimited_compression_cycles = True
+        _, calls = _run_marathon_turn(
+            agent, n_tool_iterations=8, provider_prompt_tokens=provider_prompt_tokens,
+            completed_compaction_pending=False,
+        )
+        assert len(calls) <= agent.max_compression_attempts
+
     def test_marathon_turn_compacts_past_the_per_turn_cap(self, agent):
         """8 oversized tool iterations → more compactions than the old cap.
 

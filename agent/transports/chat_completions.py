@@ -116,6 +116,26 @@ def _reasoning_config_for_model(model: str, reasoning_config: dict | None) -> di
     return reasoning_config
 
 
+def gemini_supported_efforts(model: str) -> tuple[str, ...] | None:
+    """Distinct controls implemented by this adapter; None means unknown.
+
+    Gemini 2.5 uses numeric budgets, not an effort ladder. Only Flash's
+    documented disable is represented here, never a made-up low/high budget.
+    """
+    bare = (model or "").lower().removeprefix("google/")
+    if bare.startswith("gemini-2.5-flash"):
+        return ("none",)
+    if bare.startswith("gemini-2.5-pro"):
+        return ()
+    if bare.startswith(("gemini-3.8-flash", "gemini-3.1-pro")):
+        return ("low", "medium", "high")
+    if bare.startswith("gemini-3-pro"):
+        return ("low", "high")
+    if bare.startswith(("gemini-3-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite")):
+        return ("minimal", "low", "medium", "high")
+    return None
+
+
 def _build_gemini_thinking_config(model: str, reasoning_config: dict | None) -> dict | None:
     """Translate Hermes/OpenRouter-style reasoning config to Gemini thinkingConfig."""
     if reasoning_config is None or not isinstance(reasoning_config, dict):
@@ -134,8 +154,9 @@ def _build_gemini_thinking_config(model: str, reasoning_config: dict | None) -> 
         return None
 
     if reasoning_config.get("enabled") is False:
-        # Gemini can hide thought parts even when internal thinking still
-        # happens; omit thinkingLevel to avoid model-specific validation quirks.
+        if normalized_model.startswith("gemini-2.5-flash"):
+            return {"includeThoughts": False, "thinkingBudget": 0}
+        # Hiding thought text does not disable thinking on mandatory models.
         return {"includeThoughts": False}
 
     effort = str(reasoning_config.get("effort", "medium") or "medium").strip().lower()
@@ -143,6 +164,11 @@ def _build_gemini_thinking_config(model: str, reasoning_config: dict | None) -> 
         return {"includeThoughts": False}
 
     thinking_config: Dict[str, Any] = {"includeThoughts": True}
+
+    supported = gemini_supported_efforts(normalized_model)
+    if supported and effort in supported and effort != "none":
+        thinking_config["thinkingLevel"] = effort
+        return thinking_config
 
     # Gemini 2.5 accepts thinkingBudget; don't guess a budget from Hermes'
     # coarse effort levels. ``includeThoughts`` alone is enough to surface
@@ -508,6 +534,12 @@ class ChatCompletionsTransport(ProviderTransport):
 
         # ── Provider profile: single-path when present ──────────────────
         _profile = params.get("provider_profile")
+        if _profile is None and params.get("provider_name") == "glm-subscription":
+            # Format-only delegation for the configured Coding Plan relay.
+            # Do not normalize the provider identity, endpoint or credential:
+            # those must remain on the subscription route.
+            from providers import get_provider_profile
+            _profile = get_provider_profile("zai")
         if _profile:
             return self._build_kwargs_from_profile(
                 _profile, model, sanitized, tools, params

@@ -480,7 +480,7 @@ class ResponsesApiTransport(ProviderTransport):
         self._last_issuer_kind = issuer_kind
 
         # Resolve reasoning effort
-        reasoning_effort = "medium"
+        reasoning_effort = None
         reasoning_enabled = True
         reasoning_config = params.get("reasoning_config")
         if reasoning_config and isinstance(reasoning_config, dict):
@@ -635,7 +635,7 @@ class ResponsesApiTransport(ProviderTransport):
             # those models reason natively. Only send the effort dial when
             # the target model is on the allowlist; otherwise send no
             # `reasoning` key at all and let the model reason on its own.
-            if grok_supports_reasoning_effort(model):
+            if grok_supports_reasoning_effort(model) and reasoning_effort:
                 kwargs["reasoning"] = {"effort": reasoning_effort}
         elif reasoning_enabled:
             if is_github_responses:
@@ -643,12 +643,16 @@ class ResponsesApiTransport(ProviderTransport):
                 if github_reasoning is not None:
                     kwargs["reasoning"] = github_reasoning
             else:
-                kwargs["reasoning"] = {"effort": reasoning_effort, "summary": "auto"}
+                kwargs["reasoning"] = {"summary": "auto"}
+                if reasoning_effort:
+                    kwargs["reasoning"]["effort"] = reasoning_effort
                 kwargs["include"] = (
                     ["reasoning.encrypted_content"] if replay_encrypted_reasoning else []
                 )
         elif not is_github_responses and not is_xai_responses:
             kwargs["include"] = []
+            if "none" in _supported:
+                kwargs["reasoning"] = {"effort": "none"}
 
         request_overrides = params.get("request_overrides")
         if request_overrides:

@@ -5,6 +5,22 @@ from __future__ import annotations
 import pytest
 
 
+@pytest.mark.parametrize("model,effort", [
+    ("gemini-3-flash-preview", "minimal"),
+    ("gemini-3.1-pro-preview", "medium"),
+])
+def test_picker_level_reaches_gemini_wire(model, effort):
+    from agent.transports.chat_completions import _build_gemini_thinking_config
+    result = _build_gemini_thinking_config(model, {"enabled": True, "effort": effort})
+    assert result["thinkingLevel"] == effort
+
+
+def test_flash_none_disables_computation_not_only_visibility():
+    from agent.transports.chat_completions import _build_gemini_thinking_config
+    result = _build_gemini_thinking_config("gemini-2.5-flash", {"enabled": False})
+    assert result["thinkingBudget"] == 0
+
+
 @pytest.fixture
 def gemini_profile():
     import model_tools  # noqa: F401

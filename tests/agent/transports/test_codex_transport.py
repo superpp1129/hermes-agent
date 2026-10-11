@@ -39,6 +39,18 @@ class TestCodexTransportBasic:
 
 class TestCodexBuildKwargs:
 
+    @pytest.mark.parametrize("model,config,expected", [
+        ("gpt-5.6-sol", None, None),
+        ("gpt-5.6-sol", {"enabled": False}, "none"),
+        ("gpt-6-astra", {"enabled": True, "effort": "max"}, "max"),
+    ])
+    def test_picker_effort_is_not_relabelled(self, transport, model, config, expected):
+        kwargs = transport.build_kwargs(
+            model=model, messages=[{"role": "user", "content": "Hi"}],
+            tools=[], reasoning_config=config,
+        )
+        assert kwargs.get("reasoning", {}).get("effort") == expected
+
 
 
 

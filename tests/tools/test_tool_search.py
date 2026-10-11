@@ -63,7 +63,7 @@ class TestConfigParsing:
 
 
 # ---------------------------------------------------------------------------
-# Classification — the hard invariant: core tools NEVER defer.
+# Classification — core tools stay direct unless explicitly opted in.
 # ---------------------------------------------------------------------------
 
 
@@ -166,6 +166,67 @@ class TestClassification:
         names = {(td.get("function") or {}).get("name") for td in visible}
         assert "xx_unknown_tool" in names
         assert deferrable == []
+
+
+class TestExplicitCoreDeferral:
+    names = ("session_search", "delegate_task", "skill_manage", "text_to_speech")
+
+    def test_config_parsing(self):
+        from tools.tool_search import ToolSearchConfig
+        assert ToolSearchConfig.from_raw(None).defer_tools == ()
+        assert ToolSearchConfig.from_raw({"defer_tools": "terminal"}).defer_tools == ()
+        assert ToolSearchConfig.from_raw({
+            "defer_tools": [" session_search ", None, "", "session_search"],
+        }).defer_tools == ("session_search",)
+
+    def test_assembly_opt_in_and_off(self):
+        from tools.registry import discover_builtin_tools
+        from tools.tool_search import ToolSearchConfig, assemble_tool_defs, BRIDGE_TOOL_NAMES
+        discover_builtin_tools()
+        direct = {"terminal", "read_file", "write_file", "patch"}
+        defs = [_td(name) for name in (*self.names, *direct)]
+        for mode in ("auto", "on", "off"):
+            cfg = ToolSearchConfig.from_raw({"enabled": mode, "defer_tools": list(self.names)})
+            result = assemble_tool_defs(defs, config=cfg, context_length=65536)
+            visible = {td["function"]["name"] for td in result.tool_defs}
+            assert direct <= visible
+            if mode == "off":
+                assert visible == direct | set(self.names)
+                assert not result.activated
+            else:
+                assert not set(self.names) & visible
+                assert BRIDGE_TOOL_NAMES <= visible
+                assert result.deferred_count == 4
+
+    def test_discovery_unwrap_and_session_scope(self, monkeypatch):
+        import model_tools
+        from tools.registry import discover_builtin_tools
+        from tools import tool_search as ts
+        discover_builtin_tools()
+        cfg = ts.ToolSearchConfig.from_raw({"defer_tools": list(self.names)})
+        monkeypatch.setattr(ts, "load_config", lambda: cfg)
+        defs = [_td(name, name, {"probe": {"type": "string"}}) for name in self.names]
+        assert ts.scoped_deferrable_names(defs[:1]) == {self.names[0]}
+        for name in self.names:
+            found = json.loads(ts.dispatch_tool_search({"query": name}, current_tool_defs=defs))
+            assert name in {hit["name"] for hit in found["matches"]}
+            described = json.loads(ts.dispatch_tool_describe({"name": name}, current_tool_defs=defs))
+            assert "probe" in described["parameters"]["properties"]
+            assert ts.resolve_underlying_call({"name": name, "arguments": {"probe": "ok"}}) == (
+                name, {"probe": "ok"}, None)
+            rejected = json.loads(model_tools.handle_function_call(
+                function_name="tool_call", function_args={"name": name, "arguments": {}},
+                enabled_toolsets=["terminal"],
+            ))
+            assert "not available" in rejected["error"]
+
+    def test_opt_in_does_not_override_protected_or_unknown_names(self):
+        from tools.registry import discover_builtin_tools
+        from tools.tool_search import ToolSearchConfig, is_deferrable_tool_name
+        discover_builtin_tools()
+        names = ["tool_search", "tool_call", "project_list", "read_window_below", "xx_unknown_tool"]
+        cfg = ToolSearchConfig.from_raw({"defer_tools": names})
+        assert not any(is_deferrable_tool_name(name, config=cfg) for name in names)
 
 
 # ---------------------------------------------------------------------------

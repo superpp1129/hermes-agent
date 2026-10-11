@@ -104,7 +104,16 @@ class ZaiProfile(ProviderProfile):
             enabled = reasoning_config.get("enabled") is not False
             extra_body["thinking"] = {"type": "enabled" if enabled else "disabled"}
 
-        if _is_glm_5_2(model):
+        if (model or "").lower().startswith("glm-5.3"):
+            from agent.reasoning_effort import clamp_effort, requested_effort
+            # GLM-5.3 cannot disable thinking. Its distinct native tiers are
+            # low/high/max (not GLM-5.2's high/max mapping).
+            if extra_body.get("thinking", {}).get("type") == "disabled":
+                extra_body["thinking"] = {"type": "enabled"}
+            effort = requested_effort(reasoning_config)
+            if effort:
+                top_level["reasoning_effort"] = clamp_effort(effort, ("low", "high", "max"))
+        elif _is_glm_5_2(model):
             effort = _glm_5_2_reasoning_effort(reasoning_config)
             if effort is not None:
                 top_level["reasoning_effort"] = effort

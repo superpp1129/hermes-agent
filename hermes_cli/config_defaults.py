@@ -625,6 +625,11 @@ DEFAULT_CONFIG = {
     # and override the dynamic behavior. Separate from read_file tool limits.
     "context_file_max_chars": None,
 
+    # Automatic project instruction sources, in the existing fixed precedence.
+    # Excluded formats remain ordinary files that tools may read on demand.
+    # SOUL.md is independent of this project-context allowlist.
+    "context_file_sources": ["hermes", "agents", "claude", "cursor"],
+
     # Maximum characters returned by a single read_file call.  Reads that
     # exceed this are rejected with guidance to use offset+limit.
     # 100K chars ≈ 25–35K tokens across typical tokenisers.
@@ -763,6 +768,11 @@ DEFAULT_CONFIG = {
                                       # (e.g. 6) for tool-schema-heavy sessions where 3
                                       # rounds cannot clear the request estimate.
                                       # Validated >= 1, hard-capped at 10.
+        "unlimited_cycles": False,   # no lifetime cap on compression cycles in a turn:
+                                      # real provider input below threshold restores
+                                      # max_attempts even without a summary rewrite.
+                                      # Failed/usage-less/still-pressured attempts
+                                      # remain bounded; no-progress guards stay active.
         "proactive_prune_tokens": 0,  # opt-in trigger (tokens) for the deterministic,
                                       # no-LLM tool-result prune, run independently of
                                       # `threshold` above. On large-window models
@@ -2702,7 +2712,7 @@ DEFAULT_CONFIG = {
     # tool_search / tool_describe / tool_call — and surfaced on demand.
     #
     # Core Hermes tools (terminal, read_file, write_file, patch,
-    # search_files, todo, memory, browser_*, etc.) are NEVER deferred.
+    # search_files, todo, memory, browser_*, etc.) stay direct by default.
     # See tools/tool_search.py for full design notes and the
     # openclaw-tool-search-report PDF in this PR for the rationale.
     "tools": {
@@ -2720,6 +2730,9 @@ DEFAULT_CONFIG = {
             # "auto"/"on" — activate when at least one deferrable tool exists.
             # "off" — disable entirely. Tools-array assembly is a pass-through.
             "enabled": "auto",
+            # Explicit per-profile opt-in for deferring registered core tools.
+            # Does not enable tools excluded by session toolset permissions.
+            "defer_tools": [],
             # Listing budget as a percentage of the active model's context
             # length. Effective budget = min(this % of context,
             # listing_max_tokens). Range 0..100.
